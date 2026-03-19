@@ -225,7 +225,12 @@ def labels_recommend(
             verbose=verbose,
         )
 
-    present_recommendations(result)
+    present_recommendations(
+        result.recommendations,
+        scope=result.scope,
+        total_in_scope=result.total_in_scope,
+        sample_size=result.sample_size,
+    )
 
     if output:
         with open(output, "w") as f:
