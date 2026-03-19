@@ -119,7 +119,7 @@ def send_draft(
         from_address: Sender address (defaults to PROTON_EMAIL env var).
         smtp_host: SMTP host (defaults to PROTON_SMTP_HOST env var).
         smtp_port: SMTP port (defaults to PROTON_SMTP_PORT env var).
-        password: Bridge password (defaults to PROTON_BRIDGE_PASSWORD env var).
+        password: Bridge SMTP password (defaults to PROTON_SMTP_PASSWORD env var).
 
     Raises:
         ValueError: If to_address is not set on the draft.
@@ -130,7 +130,7 @@ def send_draft(
     from_addr = from_address or os.getenv("PROTON_EMAIL", "")
     host = smtp_host or os.getenv("PROTON_SMTP_HOST", "127.0.0.1")
     port = smtp_port or int(os.getenv("PROTON_SMTP_PORT", "1025"))
-    pwd = password or os.getenv("PROTON_BRIDGE_PASSWORD", "")
+    pwd = password or os.getenv("PROTON_SMTP_PASSWORD", "") or os.getenv("PROTON_BRIDGE_PASSWORD", "")
 
     msg = MIMEText(draft.body, "plain")
     msg["Subject"] = draft.subject

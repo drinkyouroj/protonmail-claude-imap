@@ -134,7 +134,7 @@ class ProtonIMAPClient:
         self.host = host or os.getenv("PROTON_IMAP_HOST", "127.0.0.1")
         self.port = port or int(os.getenv("PROTON_IMAP_PORT", "1143"))
         self.email_address = email_address or os.getenv("PROTON_EMAIL", "")
-        self.password = password or os.getenv("PROTON_BRIDGE_PASSWORD", "")
+        self.password = password or os.getenv("PROTON_IMAP_PASSWORD", "") or os.getenv("PROTON_BRIDGE_PASSWORD", "")
         self._client: IMAPClient | None = None
         self._uidvalidity: dict[str, int] = {}  # folder -> UIDVALIDITY
 

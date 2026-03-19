@@ -79,7 +79,8 @@ PROTON_IMAP_PORT=1143
 PROTON_SMTP_HOST=127.0.0.1
 PROTON_SMTP_PORT=1025
 PROTON_EMAIL=you@proton.me
-PROTON_BRIDGE_PASSWORD=<bridge-generated password>
+PROTON_IMAP_PASSWORD=<bridge-generated IMAP password>
+PROTON_SMTP_PASSWORD=<bridge-generated SMTP password>
 
 GROQ_API_KEY=<your key>
 LLM_MODEL=openai/gpt-oss-120b
