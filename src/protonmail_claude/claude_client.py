@@ -1,4 +1,4 @@
-"""Thin wrapper around the Anthropic SDK for Claude API calls."""
+"""Thin wrapper around the Groq API (OpenAI-compatible) for LLM calls."""
 
 from __future__ import annotations
 
@@ -6,11 +6,12 @@ import json
 import logging
 import os
 
-import anthropic
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
 
@@ -21,6 +22,14 @@ def _load_prompt(name: str) -> str:
         return f.read().strip()
 
 
+def _get_client() -> OpenAI:
+    """Create an OpenAI client pointed at Groq's API."""
+    return OpenAI(
+        api_key=os.getenv("GROQ_API_KEY", ""),
+        base_url=GROQ_BASE_URL,
+    )
+
+
 def call_claude(
     user_content: str,
     system_prompt: str | None = None,
@@ -28,7 +37,7 @@ def call_claude(
     max_tokens: int = 2048,
     model: str | None = None,
 ) -> str:
-    """Send a message to Claude and return the text response.
+    """Send a message to the LLM and return the text response.
 
     Provide either `system_prompt` (raw string) or `system_prompt_name`
     (filename stem in prompts/ directory, e.g. "digest_system").
@@ -36,22 +45,27 @@ def call_claude(
     if system_prompt_name and not system_prompt:
         system_prompt = _load_prompt(system_prompt_name)
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_content})
+
+    client = _get_client()
+    response = client.chat.completions.create(
         model=model or MODEL,
         max_tokens=max_tokens,
-        system=system_prompt or "",
-        messages=[{"role": "user", "content": user_content}],
+        messages=messages,
     )
 
-    text = response.content[0].text
+    text = response.choices[0].message.content
 
     usage = response.usage
-    logger.debug(
-        "Claude API usage: input_tokens=%d, output_tokens=%d",
-        usage.input_tokens,
-        usage.output_tokens,
-    )
+    if usage:
+        logger.debug(
+            "LLM API usage: input_tokens=%d, output_tokens=%d",
+            usage.prompt_tokens,
+            usage.completion_tokens,
+        )
 
     return text
 
@@ -63,7 +77,7 @@ def call_claude_json(
     max_tokens: int = 2048,
     model: str | None = None,
 ) -> list | dict:
-    """Call Claude and parse the response as JSON.
+    """Call the LLM and parse the response as JSON.
 
     Strips markdown code fences if present before parsing.
     """

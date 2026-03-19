@@ -9,7 +9,7 @@ description = "ProtonMail + Claude API integration via Proton Bridge"
 requires-python = ">=3.12"
 dependencies = [
     "imapclient>=3.0.0",
-    "anthropic>=0.40.0",
+    "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "typer>=0.12.0",
 ]

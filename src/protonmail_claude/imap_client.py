@@ -110,8 +110,14 @@ class ProtonIMAPClient:
 
     def connect(self) -> None:
         """Connect and authenticate to Proton Bridge."""
+        import ssl
+
         self._client = IMAPClient(self.host, port=self.port, ssl=False)
-        self._client.starttls()
+        # Proton Bridge uses a self-signed certificate
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        self._client.starttls(ssl_context=ssl_context)
         self._client.login(self.email_address, self.password)
 
     def disconnect(self) -> None:
