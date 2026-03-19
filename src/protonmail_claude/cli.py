@@ -71,7 +71,7 @@ def auto_organize_cmd(
     skip_actions: str = typer.Option("", help="Comma-separated actions to suppress (e.g. 'trash,flag')."),
     output: Optional[str] = typer.Option(None, help="Write recommendations as JSON to this path."),
     max_emails: int = typer.Option(50, help="Max unread emails to process per iteration."),
-    batch_size: int = typer.Option(20, help="Emails per LLM call."),
+    batch_size: int = typer.Option(10, help="Emails per LLM call."),
     metadata_only: bool = typer.Option(False, "--metadata-only", help="Classify on sender/subject/date only, skip body."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print token usage per batch."),
     loop: bool = typer.Option(False, "--loop", help="Keep processing until no unread emails remain."),

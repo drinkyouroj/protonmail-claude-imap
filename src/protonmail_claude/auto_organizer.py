@@ -181,7 +181,7 @@ def _analyze_batch(
         raw_recs = call_claude_json(
             user_content=user_content,
             system_prompt_name="auto_organize_system",
-            max_tokens=2048,
+            max_tokens=4096,
             model=model,
         )
     except Exception as e:
