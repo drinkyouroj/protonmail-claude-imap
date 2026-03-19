@@ -122,3 +122,35 @@ def labels_bulk_move(
         mgr = LabelManager(client)
         moved = mgr.bulk_move(parsed_criteria, dest, src_folder=src)
         typer.echo(f"Moved {len(moved)} messages to {dest}")
+
+
+@labels_app.command("organize")
+def labels_organize(
+    instruction: str = typer.Argument(..., help='Natural language instruction, e.g. "Move all newsletters to Archive/Newsletters"'),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned operations without executing."),
+    context_count: int = typer.Option(50, help="Number of recent emails to include as context."),
+) -> None:
+    """Organize emails using a natural language instruction."""
+    from protonmail_claude.imap_client import ProtonIMAPClient
+    from protonmail_claude.label_manager import organize
+
+    with ProtonIMAPClient() as client:
+        result = organize(
+            instruction=instruction,
+            imap_client=client,
+            dry_run=dry_run,
+            context_count=context_count,
+        )
+
+    if not result.operations:
+        typer.echo("No operations resolved from instruction.")
+        return
+
+    typer.echo(f"\nPlanned operations ({len(result.operations)}):")
+    for i, op in enumerate(result.operations, 1):
+        typer.echo(f"  {i}. {op['action']}: {json.dumps({k: v for k, v in op.items() if k != 'action'})}")
+
+    if dry_run:
+        typer.echo("\n[dry run — no changes made]")
+    else:
+        typer.echo(f"\n{result.summary}")
