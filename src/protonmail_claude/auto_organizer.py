@@ -391,10 +391,21 @@ def auto_organize(
 
     # Step 5: Execute
     # Reconnect — the original connection likely died during LLM analysis.
-    # Bridge drops idle connections after a few minutes.
+    # Bridge drops idle connections after a few minutes and needs time to
+    # clean up stale sockets before accepting a new one.
     typer.echo("Reconnecting to Bridge for execution...")
     imap_client.disconnect()
-    imap_client.connect()
+    for attempt in range(3):
+        try:
+            time.sleep(2)  # give Bridge time to clean up
+            imap_client.connect()
+            break
+        except Exception as e:
+            if attempt < 2:
+                typer.echo(f"  Reconnect attempt {attempt + 1} failed ({e}), retrying...")
+            else:
+                typer.echo(f"  Could not reconnect to Bridge after 3 attempts: {e}")
+                raise
 
     # Pre-pass: create folders first
     mgr = LabelManager(imap_client)
