@@ -61,10 +61,19 @@ class AutoOrganizeResult:
         return json.dumps(asdict(self), indent=indent, default=str)
 
 
+FLAG_THRESHOLDS = {
+    "low": "Flag only emails that require an urgent response within 24 hours (e.g. payment failures, security alerts, account lockouts). Most emails should NOT be flagged.",
+    "medium": "Flag emails that are time-sensitive or require personal action within a few days. Newsletters, promotions, and notifications should NOT be flagged.",
+    "high": "Flag any email that might benefit from follow-up, including interesting content, requests, and time-sensitive offers.",
+}
+DEFAULT_FLAG_THRESHOLD = "low"
+
+
 def _serialize_emails(
     messages: list[EmailMessage],
     available_folders: list[str],
     metadata_only: bool = False,
+    flag_threshold: str = DEFAULT_FLAG_THRESHOLD,
 ) -> str:
     """Serialize emails for the LLM prompt with prompt injection mitigation."""
     emails = []
@@ -86,10 +95,16 @@ def _serialize_emails(
             entry["body_available"] = False
         emails.append(entry)
 
-    return json.dumps({
+    payload: dict = {
         "available_folders": available_folders,
         "emails": emails,
-    }, indent=2)
+    }
+
+    # Inject flag threshold guidance
+    threshold_guidance = FLAG_THRESHOLDS.get(flag_threshold, FLAG_THRESHOLDS[DEFAULT_FLAG_THRESHOLD])
+    payload["flag_guidance"] = threshold_guidance
+
+    return json.dumps(payload, indent=2)
 
 
 def _validate_recommendation(
@@ -173,9 +188,10 @@ def _analyze_batch(
     messages_by_uid: dict[int, EmailMessage],
     metadata_only: bool = False,
     model: str | None = None,
+    flag_threshold: str = DEFAULT_FLAG_THRESHOLD,
 ) -> list[RecommendedAction]:
     """Send a batch of emails to the LLM and return validated recommendations."""
-    user_content = _serialize_emails(messages, available_folders, metadata_only=metadata_only)
+    user_content = _serialize_emails(messages, available_folders, metadata_only=metadata_only, flag_threshold=flag_threshold)
 
     try:
         raw_recs = call_claude_json(
@@ -278,6 +294,7 @@ def auto_organize(
     metadata_only: bool = False,
     verbose: bool = False,
     model: str | None = None,
+    flag_threshold: str = DEFAULT_FLAG_THRESHOLD,
 ) -> AutoOrganizeResult:
     """End-to-end auto-organize pipeline.
 
@@ -332,6 +349,7 @@ def auto_organize(
         batch_recs = _analyze_batch(
             batch, available_folders, valid_uids, messages_by_uid,
             metadata_only=metadata_only, model=model,
+            flag_threshold=flag_threshold,
         )
         all_recommendations.extend(batch_recs)
 
@@ -437,6 +455,7 @@ def auto_organize_loop(
     model: str | None = None,
     max_iterations: int = 100,
     inter_batch_delay: int = 5,
+    flag_threshold: str = DEFAULT_FLAG_THRESHOLD,
 ) -> None:
     """Run auto_organize in a loop until the inbox is clear or a stop condition is hit.
 
@@ -477,6 +496,7 @@ def auto_organize_loop(
                     metadata_only=metadata_only,
                     verbose=verbose,
                     model=model,
+                    flag_threshold=flag_threshold,
                 )
 
             iter_applied = len(result.applied)

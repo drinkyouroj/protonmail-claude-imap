@@ -74,6 +74,7 @@ def auto_organize_cmd(
     batch_size: int = typer.Option(10, help="Emails per LLM call."),
     metadata_only: bool = typer.Option(False, "--metadata-only", help="Classify on sender/subject/date only, skip body."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print token usage per batch."),
+    flag_threshold: str = typer.Option("low", "--flag-threshold", help="How aggressively to flag emails: low (urgent only), medium (time-sensitive), high (anything interesting)."),
     loop: bool = typer.Option(False, "--loop", help="Keep processing until no unread emails remain."),
     max_iterations: int = typer.Option(100, help="Hard cap on loop iterations (only used with --loop)."),
     inter_batch_delay: int = typer.Option(5, help="Seconds to sleep between iterations (only used with --loop)."),
@@ -98,6 +99,7 @@ def auto_organize_cmd(
             verbose=verbose,
             max_iterations=max_iterations,
             inter_batch_delay=inter_batch_delay,
+            flag_threshold=flag_threshold,
         )
         return
 
@@ -112,6 +114,7 @@ def auto_organize_cmd(
             skip_actions=skip_set,
             metadata_only=metadata_only,
             verbose=verbose,
+            flag_threshold=flag_threshold,
         )
 
     if output:

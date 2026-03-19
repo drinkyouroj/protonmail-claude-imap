@@ -4,7 +4,7 @@ Available actions:
 - "archive": Move to Archive folder. Use for routine, read-worthy but non-actionable emails.
 - "move": Move to a specific folder. Set "dest_folder" to the target. Set "create_folder_if_missing" to true only if the folder does not exist yet.
 - "label": Apply an IMAP flag without moving. Set "label" to the flag string (e.g. "\\Flagged").
-- "flag": Star / mark as important. Use for emails requiring attention or follow-up.
+- "flag": Star / mark as important. Use SPARINGLY — see the "flag_guidance" field in the input for the current threshold. When in doubt, prefer "move" or "archive" over "flag".
 - "mark_read": Mark as read without moving. Use for notifications already seen or irrelevant.
 - "trash": Move to Trash. Use ONLY for unambiguous spam or junk you are highly confident about.
 - "skip": Do nothing. Use when you are not confident about the right action.
