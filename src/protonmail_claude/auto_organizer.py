@@ -372,7 +372,14 @@ def auto_organize(
             return result
 
     # Step 5: Execute
+    # Reconnect — the original connection likely died during LLM analysis.
+    # Bridge drops idle connections after a few minutes.
+    typer.echo("Reconnecting to Bridge for execution...")
+    imap_client.disconnect()
+    imap_client.connect()
+
     # Pre-pass: create folders first
+    mgr = LabelManager(imap_client)
     folders_to_create = set()
     for rec in non_skip:
         if rec.create_folder_if_missing and rec.dest_folder and rec.dest_folder not in available_folders:
@@ -387,7 +394,8 @@ def auto_organize(
             logger.warning("Failed to create folder %s: %s", folder_name, e)
             result.errors.append({"uid": None, "action": "create_folder", "folder": folder_name, "error": str(e)})
 
-    # Check UIDVALIDITY before writes
+    # Check UIDVALIDITY before writes (re-selects folder on fresh connection)
+    imap_client.select_folder(folder, readonly=True)  # establish baseline
     imap_client.assert_uidvalidity(folder)
 
     for rec in all_recommendations:
