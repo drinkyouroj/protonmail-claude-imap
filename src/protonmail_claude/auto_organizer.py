@@ -9,9 +9,15 @@ from dataclasses import asdict, dataclass, field
 
 import typer
 
-from protonmail_claude.claude_client import call_claude_json
+from protonmail_claude.claude_client import call_claude_json, _load_prompt
 from protonmail_claude.imap_client import EmailMessage, ProtonIMAPClient
 from protonmail_claude.label_manager import LabelManager
+from protonmail_claude.pattern_store import (
+    format_patterns_for_prompt,
+    get_patterns_for_batch,
+    record_actions,
+)
+from protonmail_claude.profile import build_system_prompt, load_profile
 
 logger = logging.getLogger(__name__)
 
@@ -189,14 +195,18 @@ def _analyze_batch(
     metadata_only: bool = False,
     model: str | None = None,
     flag_threshold: str = DEFAULT_FLAG_THRESHOLD,
+    system_prompt: str | None = None,
 ) -> list[RecommendedAction]:
     """Send a batch of emails to the LLM and return validated recommendations."""
     user_content = _serialize_emails(messages, available_folders, metadata_only=metadata_only, flag_threshold=flag_threshold)
 
+    # Use pre-built system prompt (with profile + patterns) or fall back to base
+    prompt_to_use = system_prompt or _load_prompt("auto_organize_system")
+
     try:
         raw_recs = call_claude_json(
             user_content=user_content,
-            system_prompt_name="auto_organize_system",
+            system_prompt=prompt_to_use,
             max_tokens=4096,
             model=model,
         )
@@ -340,6 +350,19 @@ def auto_organize(
     mgr = LabelManager(imap_client)
     available_folders = mgr.list_folders()
 
+    # Build enriched system prompt once (profile + patterns for this batch)
+    base_prompt = _load_prompt("auto_organize_system")
+    user_profile = load_profile()
+    enriched_prompt = build_system_prompt(base_prompt, user_profile)
+
+    # Inject learned patterns as few-shot context
+    all_senders = [msg.sender for msg in messages]
+    matched_patterns = get_patterns_for_batch(all_senders)
+    if matched_patterns:
+        pattern_section = format_patterns_for_prompt(matched_patterns)
+        enriched_prompt = enriched_prompt + "\n\n" + pattern_section
+        typer.echo(f"  {len(matched_patterns)} learned pattern(s) injected into prompt.")
+
     # Step 2: Analyze in batches
     all_recommendations: list[RecommendedAction] = []
     batches = [messages[i:i + batch_size] for i in range(0, len(messages), batch_size)]
@@ -350,6 +373,7 @@ def auto_organize(
             batch, available_folders, valid_uids, messages_by_uid,
             metadata_only=metadata_only, model=model,
             flag_threshold=flag_threshold,
+            system_prompt=enriched_prompt,
         )
         all_recommendations.extend(batch_recs)
 
@@ -447,7 +471,14 @@ def auto_organize(
             logger.warning("Failed to apply %s on UID %d: %s", rec.action, rec.uid, e)
             result.errors.append({"uid": rec.uid, "action": rec.action, "error": str(e)})
 
-    # Step 6: Report
+    # Step 6: Record patterns from applied actions
+    if result.applied:
+        record_actions([
+            {"sender": rec.sender, "action": rec.action, "dest_folder": rec.dest_folder}
+            for rec in result.applied
+        ])
+
+    # Step 7: Report
     typer.echo(f"\n{result.summary}")
     if result.errors:
         for err in result.errors:

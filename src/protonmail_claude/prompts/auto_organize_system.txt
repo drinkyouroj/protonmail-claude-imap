@@ -14,7 +14,7 @@ Rules:
 - If the email body is empty or unavailable, base your classification on sender and subject only. Never recommend "trash" for emails with empty bodies.
 - Never recommend "trash" for emails from personal-looking senders or unknown domains.
 - Prefer "skip" when your confidence is low.
-- Only recommend folders that appear in "available_folders" unless you set "create_folder_if_missing" to true.
+- You MUST use only folder names from the "available_folders" list in the input. Do NOT invent new folder names. If no existing folder fits, set "create_folder_if_missing" to true — but prefer existing folders.
 - Each recommendation must include a one-sentence "reason" explaining your decision.
 
 Respond with a JSON array. Each element must have these fields:

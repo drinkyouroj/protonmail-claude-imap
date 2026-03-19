@@ -14,6 +14,8 @@ load_dotenv()
 app = typer.Typer(help="ProtonMail + Claude API integration via Proton Bridge.")
 labels_app = typer.Typer(help="Label and folder management.")
 app.add_typer(labels_app, name="labels")
+profile_app = typer.Typer(help="Manage your email organization profile.")
+app.add_typer(profile_app, name="profile")
 
 
 @app.command()
@@ -121,6 +123,45 @@ def auto_organize_cmd(
         with open(output, "w") as f:
             f.write(result.to_json())
         typer.echo(f"Recommendations written to {output}")
+
+
+@profile_app.command("init")
+def profile_init_cmd() -> None:
+    """Bootstrap an organization profile from your IMAP folder structure."""
+    from protonmail_claude.imap_client import ProtonIMAPClient
+    from protonmail_claude.label_manager import LabelManager
+    from protonmail_claude.profile import get_profile_path, init_profile
+
+    path = get_profile_path()
+    if path.exists():
+        if not typer.confirm(f"Profile already exists at {path}. Overwrite?"):
+            raise typer.Abort()
+
+    with ProtonIMAPClient() as client:
+        mgr = LabelManager(client)
+        folders = mgr.list_folders()
+
+    result_path = init_profile(folders)
+    typer.echo(f"Profile created at {result_path}")
+    typer.echo("Edit it to describe your organization preferences, then run auto-organize.")
+
+
+@profile_app.command("edit")
+def profile_edit_cmd() -> None:
+    """Open your organization profile in $EDITOR."""
+    from protonmail_claude.profile import edit_profile
+    edit_profile()
+
+
+@profile_app.command("show")
+def profile_show_cmd() -> None:
+    """Display your current organization profile."""
+    from protonmail_claude.profile import load_profile
+    profile = load_profile()
+    if profile:
+        typer.echo(profile)
+    else:
+        typer.echo("No profile found. Run 'profile init' to create one.")
 
 
 @labels_app.command("list")
