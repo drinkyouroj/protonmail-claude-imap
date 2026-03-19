@@ -5,11 +5,14 @@ from __future__ import annotations
 import email
 import email.header
 import email.utils
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from imapclient import IMAPClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -86,6 +89,28 @@ def _parse_message(uid: int, raw_bytes: bytes) -> EmailMessage:
         subject=_decode_header(msg.get("Subject")),
         date=parsed_date,
         body=_extract_body(msg),
+        message_id=msg.get("Message-ID"),
+        in_reply_to=msg.get("In-Reply-To"),
+        references=_parse_references(msg.get("References")),
+    )
+
+
+def _parse_headers_only(uid: int, raw_bytes: bytes) -> EmailMessage:
+    """Parse raw header bytes into an EmailMessage with an empty body."""
+    msg = email.message_from_bytes(raw_bytes)
+    date_str = msg.get("Date")
+    parsed_date = None
+    if date_str:
+        try:
+            parsed_date = email.utils.parsedate_to_datetime(date_str)
+        except Exception:
+            parsed_date = None
+    return EmailMessage(
+        uid=uid,
+        sender=_decode_header(msg.get("From")),
+        subject=_decode_header(msg.get("Subject")),
+        date=parsed_date,
+        body="",
         message_id=msg.get("Message-ID"),
         in_reply_to=msg.get("In-Reply-To"),
         references=_parse_references(msg.get("References")),
@@ -254,6 +279,49 @@ class ProtonIMAPClient:
                 messages.append(_parse_message(msg_uid, raw_messages[msg_uid][b"RFC822"]))
 
         return messages
+
+    def list_folders_with_flags(self) -> list[tuple[tuple[bytes, ...], str]]:
+        """List all IMAP folders with their flags. Returns [(flags, name), ...]."""
+        raw = self.client.list_folders()
+        return [(flags, name) for flags, _delimiter, name in raw]
+
+    def fetch_headers_only(self, uids: list[int], folder: str = "INBOX") -> list[EmailMessage]:
+        """Fetch only headers for the given UIDs. Bodies will be empty strings.
+        Falls back to full RFC822 if Bridge doesn't support partial fetch."""
+        if not uids:
+            return []
+        self.select_folder(folder, readonly=True)
+        fetch_spec = "BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)]"
+        header_key = b"BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)]"
+        try:
+            raw_messages = self.client.fetch(uids, [fetch_spec])
+            has_header_data = any(
+                header_key in raw_messages.get(uid, {}) for uid in uids if uid in raw_messages
+            )
+            if not has_header_data:
+                raise ValueError("No BODY[HEADER.FIELDS] data in response")
+        except Exception as exc:
+            logger.warning("BODY[HEADER.FIELDS] fetch failed (%s); falling back to full RFC822.", exc)
+            raw_messages = self.client.fetch(uids, ["RFC822"])
+            messages = []
+            for uid in uids:
+                if uid in raw_messages and b"RFC822" in raw_messages[uid]:
+                    msg = _parse_message(uid, raw_messages[uid][b"RFC822"])
+                    msg.body = ""
+                    messages.append(msg)
+            return messages
+        messages = []
+        for uid in uids:
+            if uid not in raw_messages:
+                continue
+            data = raw_messages[uid]
+            if header_key in data:
+                messages.append(_parse_headers_only(uid, data[header_key]))
+        return messages
+
+    def folder_status(self, folder: str) -> dict:
+        """Get STATUS (MESSAGES, UNSEEN, RECENT) for a folder without selecting it."""
+        return self.client.folder_status(folder, [b"MESSAGES", b"UNSEEN", b"RECENT"])
 
     def __enter__(self) -> ProtonIMAPClient:
         self.connect()

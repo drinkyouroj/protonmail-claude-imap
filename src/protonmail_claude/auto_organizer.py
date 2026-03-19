@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 
 import typer
@@ -415,3 +416,112 @@ def auto_organize(
             typer.echo(f"  ERROR: UID {err.get('uid')} {err['action']}: {err['error']}")
 
     return result
+
+
+def auto_organize_loop(
+    folder: str = "INBOX",
+    max_emails: int = 50,
+    batch_size: int = 20,
+    auto_confirm: bool = False,
+    skip_actions: set[str] | None = None,
+    metadata_only: bool = False,
+    verbose: bool = False,
+    model: str | None = None,
+    max_iterations: int = 100,
+    inter_batch_delay: int = 5,
+) -> None:
+    """Run auto_organize in a loop until the inbox is clear or a stop condition is hit.
+
+    Opens a fresh ProtonIMAPClient connection per iteration to handle Bridge idle drops.
+    Tracks cumulative totals and detects LLM stalls (two consecutive all-skip iterations
+    on identical UID sets). User declining confirmations is not a stall — the loop continues.
+    """
+    total_applied = 0
+    total_skipped = 0
+    total_errors = 0
+
+    # Stall detection state
+    prev_skip_only_uids: frozenset[int] | None = None
+    consecutive_llm_skips = 0
+
+    try:
+        for iteration in range(1, max_iterations + 1):
+            with ProtonIMAPClient() as client:
+                # Peek at unread count for the header
+                unread_uids = client.search(["UNSEEN"], folder=folder)
+
+            if not unread_uids:
+                typer.echo(f"\nLoop complete — inbox clear.")
+                break
+
+            unread_count = len(unread_uids)
+            typer.echo(f"\n--- Iteration {iteration} | {unread_count:,} unread remain in {folder} ---")
+
+            with ProtonIMAPClient() as client:
+                result = auto_organize(
+                    imap_client=client,
+                    folder=folder,
+                    max_emails=max_emails,
+                    batch_size=batch_size,
+                    dry_run=False,
+                    auto_confirm=auto_confirm,
+                    skip_actions=skip_actions,
+                    metadata_only=metadata_only,
+                    verbose=verbose,
+                    model=model,
+                )
+
+            iter_applied = len(result.applied)
+            iter_skipped = len(result.skipped)
+            iter_errors = len(result.errors)
+            total_applied += iter_applied
+            total_skipped += iter_skipped
+            total_errors += iter_errors
+
+            typer.echo(
+                f"Iteration {iteration}: {iter_applied} applied, "
+                f"{iter_skipped} skipped, {iter_errors} error(s)"
+            )
+            typer.echo(
+                f"Session total: {total_applied} applied, "
+                f"{total_skipped} skipped, {total_errors} error(s)"
+            )
+
+            # LLM stall detection: all recommendations were skip and UIDs unchanged
+            processed_uids = frozenset(r.uid for r in result.recommendations)
+            all_skipped_by_llm = all(r.action == "skip" for r in result.recommendations)
+
+            if all_skipped_by_llm and result.recommendations:
+                if prev_skip_only_uids == processed_uids:
+                    consecutive_llm_skips += 1
+                else:
+                    consecutive_llm_skips = 1
+                prev_skip_only_uids = processed_uids
+            else:
+                consecutive_llm_skips = 0
+                prev_skip_only_uids = None
+
+            if consecutive_llm_skips >= 2:
+                typer.echo(
+                    "\nNo actionable recommendations for remaining emails. Stopping."
+                )
+                break
+
+            if iteration >= max_iterations:
+                typer.echo(f"\nReached max iterations ({max_iterations}). Stopping.")
+                break
+
+            typer.echo(f"Next batch in {inter_batch_delay}s... (Ctrl+C to stop)")
+            time.sleep(inter_batch_delay)
+
+        else:
+            # for-loop exhausted without break
+            typer.echo(f"\nReached max iterations ({max_iterations}). Stopping.")
+
+    except KeyboardInterrupt:
+        typer.echo("\nInterrupted by user.")
+
+    typer.echo(
+        f"\nIterations: {iteration} | Applied: {total_applied} | "
+        f"Skipped: {total_skipped} | Errors: {total_errors}"
+    )
