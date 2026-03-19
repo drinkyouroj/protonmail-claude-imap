@@ -2,10 +2,11 @@
 
 ## Project Overview
 
-A Python-based integration that connects ProtonMail (via Proton Bridge on macOS) to the
-Claude API. Supports three core workflows: **email digest/summarization**, **auto-draft
-reply generation**, and **label/folder management**. Designed to run both as a local
-CLI pipeline and as a backend that surfaces capability to Claude.ai via a Gmail proxy.
+A Python-based integration that connects ProtonMail (via Proton Bridge on macOS) to an
+LLM via the Groq API (OpenAI-compatible). Supports three core workflows: **email
+digest/summarization**, **auto-draft reply generation**, and **label/folder management**.
+Designed to run both as a local CLI pipeline and as a backend that surfaces capability
+to Claude.ai via a Gmail proxy.
 
 ---
 
@@ -18,7 +19,7 @@ Proton Bridge (localhost IMAP:1143 / SMTP:1025)
         ↓
 Python IMAP/SMTP client (IMAPClient + smtplib)
         ↓
-Claude API (anthropic SDK — claude-sonnet-4-x)
+Groq API (OpenAI-compatible SDK — openai/gpt-oss-120b)
         ↓
 Outputs: digest, draft replies, label mutations
 ```
@@ -32,7 +33,7 @@ Outputs: digest, draft replies, label mutations
 | Language | Python 3.12+ |
 | IMAP client | `IMAPClient` |
 | SMTP | `smtplib` (stdlib) |
-| Claude | `anthropic` SDK |
+| LLM | `openai` SDK (Groq API, OpenAI-compatible) |
 | Config | `python-dotenv` |
 | CLI | `typer` |
 | Testing | `pytest` |
@@ -54,7 +55,8 @@ protonmail-claude/
 │       ├── imap_client.py      # IMAP connect, fetch, search
 │       ├── smtp_client.py      # SMTP send / draft
 │       ├── label_manager.py    # Folder/label CRUD
-│       ├── claude_client.py    # Anthropic API calls
+│       ├── __main__.py         # python -m entry point
+│       ├── claude_client.py    # LLM API calls (Groq/OpenAI-compatible)
 │       ├── digest.py           # Digest pipeline
 │       ├── drafter.py          # Auto-draft reply pipeline
 │       └── cli.py              # Typer CLI entry points
@@ -79,8 +81,8 @@ PROTON_SMTP_PORT=1025
 PROTON_EMAIL=you@proton.me
 PROTON_BRIDGE_PASSWORD=<bridge-generated password>
 
-ANTHROPIC_API_KEY=<your key>
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
+GROQ_API_KEY=<your key>
+LLM_MODEL=openai/gpt-oss-120b
 
 # Optional — ARQ task queue
 REDIS_URL=redis://localhost:6379
@@ -246,44 +248,54 @@ pytest tests/test_digest.py -v
 
 ---
 
-## Claude API Usage Conventions
+## LLM API Usage Conventions
 
 ```python
 # Always use the model from env — never hardcode
 import os
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 
-# Standard call pattern
-client = anthropic.Anthropic()
-response = client.messages.create(
-    model=MODEL,
-    max_tokens=2048,
-    system=SYSTEM_PROMPT,
-    messages=[{"role": "user", "content": user_content}]
-)
+# Standard call pattern (via claude_client.py helpers)
+from protonmail_claude.claude_client import call_claude, call_claude_json
+
+# Text response
+result = call_claude("prompt text", system_prompt_name="digest_system")
+
+# JSON response (strips fences, parses safely)
+data = call_claude_json("prompt text", system_prompt_name="organize_system")
 ```
+
+The LLM backend is Groq (OpenAI-compatible). `claude_client.py` wraps the `openai`
+SDK pointed at `https://api.groq.com/openai/v1`. The module name is historical.
 
 - Keep system prompts in `src/protonmail_claude/prompts/` as `.txt` files — not
   hardcoded in function bodies
 - Log token usage in debug mode for cost awareness
 - Structured JSON outputs: instruct model to return JSON, strip fences, parse safely
+- Email body content sent to Groq is an accepted trade-off — Bridge decrypts
+  locally, and sending plaintext to a third-party API is inherent to LLM integration
 
 ---
 
 ## CLI Commands (Typer)
 
 ```bash
+# All commands via python -m
+python -m protonmail_claude <command>
+
 # Fetch and summarize inbox digest
-python -m protonmail_claude.cli digest --count 20 --output digest.json
+python -m protonmail_claude digest --count 20 --output digest.json
 
 # Draft a reply to a specific email
-python -m protonmail_claude.cli draft --uid 1042
-python -m protonmail_claude.cli draft --uid 1042 --send   # confirmation required
+python -m protonmail_claude draft --uid 1042
+python -m protonmail_claude draft --uid 1042 --send   # confirmation required
 
 # Label management
-python -m protonmail_claude.cli labels list
-python -m protonmail_claude.cli labels move --uid 1042 --dest "Archive/Newsletters"
-python -m protonmail_claude.cli labels create --name "Projects/GhostEditor"
+python -m protonmail_claude labels list
+python -m protonmail_claude labels move --uid 1042 --dest "Archive/Newsletters"
+python -m protonmail_claude labels create --name "Projects/GhostEditor"
+python -m protonmail_claude labels organize "Move all newsletters to Newsletters"
+python -m protonmail_claude labels recommend --sample-size 200
 ```
 
 ---
