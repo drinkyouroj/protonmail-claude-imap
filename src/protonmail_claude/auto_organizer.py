@@ -407,6 +407,11 @@ def auto_organize(
                 typer.echo(f"  Could not reconnect to Bridge after 3 attempts: {e}")
                 raise
 
+    # Clear stale UIDVALIDITY cache — we just reconnected, so the old
+    # values are from a dead session. The write operations will select
+    # the folder as needed via LabelManager methods.
+    imap_client._uidvalidity.clear()
+
     # Pre-pass: create folders first
     mgr = LabelManager(imap_client)
     folders_to_create = set()
@@ -422,10 +427,6 @@ def auto_organize(
         except Exception as e:
             logger.warning("Failed to create folder %s: %s", folder_name, e)
             result.errors.append({"uid": None, "action": "create_folder", "folder": folder_name, "error": str(e)})
-
-    # Check UIDVALIDITY before writes (re-selects folder on fresh connection)
-    imap_client.select_folder(folder, readonly=True)  # establish baseline
-    imap_client.assert_uidvalidity(folder)
 
     for rec in all_recommendations:
         if rec.action == "skip":
