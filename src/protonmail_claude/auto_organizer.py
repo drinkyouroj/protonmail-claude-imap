@@ -275,22 +275,29 @@ def _apply_recommendation(
     mgr: LabelManager,
     folder: str,
 ) -> None:
-    """Execute a single recommendation via LabelManager."""
+    """Execute a single recommendation using raw IMAP ops.
+
+    Assumes the folder is already selected — avoids redundant SELECT calls
+    that overwhelm Bridge on large mailboxes.
+    """
     if rec.action == "skip":
         return
 
-    if rec.action == "archive":
-        mgr.move_message(rec.uid, rec.dest_folder or "Archive", src_folder=folder)
-    elif rec.action == "move":
-        mgr.move_message(rec.uid, rec.dest_folder, src_folder=folder)
-    elif rec.action == "trash":
-        mgr.move_message(rec.uid, "Trash", src_folder=folder)
+    imap = mgr.imap
+
+    if rec.action in ("archive", "move", "trash"):
+        dest = {"archive": rec.dest_folder or "Archive",
+                "move": rec.dest_folder,
+                "trash": "Trash"}[rec.action]
+        imap.copy([rec.uid], dest)
+        imap.set_flags([rec.uid], [b"\\Deleted"])
+        imap.expunge([rec.uid])
     elif rec.action == "flag":
-        mgr.apply_label(rec.uid, "\\Flagged", folder=folder)
+        imap.add_flags([rec.uid], [b"\\Flagged"])
     elif rec.action == "label":
-        mgr.apply_label(rec.uid, rec.label, folder=folder)
+        imap.add_flags([rec.uid], [rec.label.encode()])
     elif rec.action == "mark_read":
-        mgr.apply_label(rec.uid, "\\Seen", folder=folder)
+        imap.add_flags([rec.uid], [b"\\Seen"])
 
 
 def auto_organize(
@@ -452,6 +459,22 @@ def auto_organize(
             logger.warning("Failed to create folder %s: %s", folder_name, e)
             result.errors.append({"uid": None, "action": "create_folder", "folder": folder_name, "error": str(e)})
 
+    # Select folder once before the execution loop — avoids 50 redundant
+    # SELECT calls on a 40K mailbox which overwhelms Bridge.
+    try:
+        mgr.imap.select_folder(folder)
+    except Exception:
+        pass  # Will be retried on first operation
+
+    def _reconnect_and_select() -> None:
+        """Reconnect to Bridge and re-select the folder."""
+        typer.echo("  Connection lost, reconnecting...")
+        imap_client.disconnect()
+        time.sleep(2)
+        imap_client.connect()
+        mgr._client = imap_client  # rebind the label manager
+        mgr.imap.select_folder(folder)
+
     for rec in all_recommendations:
         if rec.action == "skip":
             result.skipped.append(rec)
@@ -464,12 +487,21 @@ def auto_organize(
                 result.skipped.append(rec)
                 continue
 
-        try:
-            _apply_recommendation(rec, mgr, folder)
-            result.applied.append(rec)
-        except Exception as e:
-            logger.warning("Failed to apply %s on UID %d: %s", rec.action, rec.uid, e)
-            result.errors.append({"uid": rec.uid, "action": rec.action, "error": str(e)})
+        # Try the operation, reconnect once on timeout, then fail
+        for attempt in range(2):
+            try:
+                _apply_recommendation(rec, mgr, folder)
+                result.applied.append(rec)
+                break
+            except Exception as e:
+                if attempt == 0 and "timed out" in str(e).lower():
+                    try:
+                        _reconnect_and_select()
+                        continue  # retry the operation
+                    except Exception as reconnect_err:
+                        logger.warning("Reconnect failed: %s", reconnect_err)
+                logger.warning("Failed to apply %s on UID %d: %s", rec.action, rec.uid, e)
+                result.errors.append({"uid": rec.uid, "action": rec.action, "error": str(e)})
 
     # Step 6: Record patterns from applied actions
     if result.applied:
