@@ -5,11 +5,14 @@ from __future__ import annotations
 import email
 import email.header
 import email.utils
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from imapclient import IMAPClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,6 +95,32 @@ def _parse_message(uid: int, raw_bytes: bytes) -> EmailMessage:
     )
 
 
+def _parse_headers_only(uid: int, raw_bytes: bytes) -> EmailMessage:
+    """Parse raw header bytes into an EmailMessage with an empty body."""
+    msg = email.message_from_bytes(raw_bytes)
+    date_str = msg.get("Date")
+    parsed_date = None
+    if date_str:
+        try:
+            parsed_date = email.utils.parsedate_to_datetime(date_str)
+        except Exception:
+            parsed_date = None
+    return EmailMessage(
+        uid=uid,
+        sender=_decode_header(msg.get("From")),
+        subject=_decode_header(msg.get("Subject")),
+        date=parsed_date,
+        body="",
+        message_id=msg.get("Message-ID"),
+        in_reply_to=msg.get("In-Reply-To"),
+        references=_parse_references(msg.get("References")),
+    )
+
+
+class UIDValidityError(Exception):
+    """Raised when UIDVALIDITY has changed, meaning UIDs may be stale."""
+
+
 class ProtonIMAPClient:
     """High-level IMAP client for Proton Bridge."""
 
@@ -107,6 +136,7 @@ class ProtonIMAPClient:
         self.email_address = email_address or os.getenv("PROTON_EMAIL", "")
         self.password = password or os.getenv("PROTON_BRIDGE_PASSWORD", "")
         self._client: IMAPClient | None = None
+        self._uidvalidity: dict[str, int] = {}  # folder -> UIDVALIDITY
 
     def connect(self) -> None:
         """Connect and authenticate to Proton Bridge."""
@@ -136,9 +166,38 @@ class ProtonIMAPClient:
             raise RuntimeError("Not connected. Call connect() first.")
         return self._client
 
+    def select_folder(self, folder: str, readonly: bool = True) -> dict:
+        """Select a folder and track its UIDVALIDITY."""
+        result = self.client.select_folder(folder, readonly=readonly)
+        uidvalidity = result.get(b"UIDVALIDITY")
+        if uidvalidity is not None:
+            self._uidvalidity[folder] = uidvalidity
+        return result
+
+    def get_uidvalidity(self, folder: str) -> int | None:
+        """Return the last-seen UIDVALIDITY for a folder, or None."""
+        return self._uidvalidity.get(folder)
+
+    def assert_uidvalidity(self, folder: str) -> None:
+        """Re-select folder and assert UIDVALIDITY hasn't changed.
+
+        Raises UIDValidityError if the value has changed since last select.
+        """
+        old = self._uidvalidity.get(folder)
+        if old is None:
+            return  # No previous value to compare against
+        result = self.client.select_folder(folder, readonly=False)
+        new = result.get(b"UIDVALIDITY")
+        if new is not None and new != old:
+            raise UIDValidityError(
+                f"UIDVALIDITY changed for {folder}: {old} -> {new}. "
+                "UIDs may be stale. Aborting to prevent operating on wrong messages."
+            )
+        self._uidvalidity[folder] = new or old
+
     def fetch_recent(self, folder: str = "INBOX", count: int = 20) -> list[EmailMessage]:
         """Fetch the most recent `count` emails from `folder`."""
-        self.client.select_folder(folder, readonly=True)
+        self.select_folder(folder, readonly=True)
         uids = self.client.search(["ALL"])
         recent_uids = uids[-count:] if len(uids) > count else uids
 
@@ -153,9 +212,23 @@ class ProtonIMAPClient:
 
         return messages
 
+    def fetch_by_uids(self, uids: list[int], folder: str = "INBOX") -> list[EmailMessage]:
+        """Fetch multiple emails by UID list."""
+        self.select_folder(folder, readonly=True)
+
+        if not uids:
+            return []
+
+        raw_messages = self.client.fetch(uids, ["RFC822"])
+        messages = []
+        for uid in uids:
+            if uid in raw_messages and b"RFC822" in raw_messages[uid]:
+                messages.append(_parse_message(uid, raw_messages[uid][b"RFC822"]))
+        return messages
+
     def fetch_by_uid(self, uid: int, folder: str = "INBOX") -> EmailMessage | None:
         """Fetch a single email by UID."""
-        self.client.select_folder(folder, readonly=True)
+        self.select_folder(folder, readonly=True)
         raw_messages = self.client.fetch([uid], ["RFC822"])
 
         if uid not in raw_messages or b"RFC822" not in raw_messages[uid]:
@@ -165,7 +238,7 @@ class ProtonIMAPClient:
 
     def search(self, criteria: list[str], folder: str = "INBOX") -> list[int]:
         """Search for messages matching IMAP criteria. Returns list of UIDs."""
-        self.client.select_folder(folder, readonly=True)
+        self.select_folder(folder, readonly=True)
         return self.client.search(criteria)
 
     def fetch_thread(self, uid: int, folder: str = "INBOX") -> list[EmailMessage]:
@@ -189,7 +262,7 @@ class ProtonIMAPClient:
             return [root]
 
         # Search for each message ID in the thread
-        self.client.select_folder(folder, readonly=True)
+        self.select_folder(folder, readonly=True)
         thread_uids: set[int] = {uid}
         for msg_id in thread_ids:
             found = self.client.search(["HEADER", "Message-ID", msg_id])
@@ -206,6 +279,49 @@ class ProtonIMAPClient:
                 messages.append(_parse_message(msg_uid, raw_messages[msg_uid][b"RFC822"]))
 
         return messages
+
+    def list_folders_with_flags(self) -> list[tuple[tuple[bytes, ...], str]]:
+        """List all IMAP folders with their flags. Returns [(flags, name), ...]."""
+        raw = self.client.list_folders()
+        return [(flags, name) for flags, _delimiter, name in raw]
+
+    def fetch_headers_only(self, uids: list[int], folder: str = "INBOX") -> list[EmailMessage]:
+        """Fetch only headers for the given UIDs. Bodies will be empty strings.
+        Falls back to full RFC822 if Bridge doesn't support partial fetch."""
+        if not uids:
+            return []
+        self.select_folder(folder, readonly=True)
+        fetch_spec = "BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)]"
+        header_key = b"BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)]"
+        try:
+            raw_messages = self.client.fetch(uids, [fetch_spec])
+            has_header_data = any(
+                header_key in raw_messages.get(uid, {}) for uid in uids if uid in raw_messages
+            )
+            if not has_header_data:
+                raise ValueError("No BODY[HEADER.FIELDS] data in response")
+        except Exception as exc:
+            logger.warning("BODY[HEADER.FIELDS] fetch failed (%s); falling back to full RFC822.", exc)
+            raw_messages = self.client.fetch(uids, ["RFC822"])
+            messages = []
+            for uid in uids:
+                if uid in raw_messages and b"RFC822" in raw_messages[uid]:
+                    msg = _parse_message(uid, raw_messages[uid][b"RFC822"])
+                    msg.body = ""
+                    messages.append(msg)
+            return messages
+        messages = []
+        for uid in uids:
+            if uid not in raw_messages:
+                continue
+            data = raw_messages[uid]
+            if header_key in data:
+                messages.append(_parse_headers_only(uid, data[header_key]))
+        return messages
+
+    def folder_status(self, folder: str) -> dict:
+        """Get STATUS (MESSAGES, UNSEEN, RECENT) for a folder without selecting it."""
+        return self.client.folder_status(folder, [b"MESSAGES", b"UNSEEN", b"RECENT"])
 
     def __enter__(self) -> ProtonIMAPClient:
         self.connect()
