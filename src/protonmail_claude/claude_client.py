@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,7 @@ def call_claude(
     messages.append({"role": "user", "content": user_content})
 
     client = _get_client()
-    response = client.chat.completions.create(
-        model=model or MODEL,
-        max_tokens=max_tokens,
-        messages=messages,
-    )
+    response = _call_with_retry(client, model or MODEL, max_tokens, messages)
 
     text = response.choices[0].message.content
 
@@ -68,6 +65,27 @@ def call_claude(
         )
 
     return text
+
+
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # seconds
+
+
+def _call_with_retry(client: OpenAI, model: str, max_tokens: int, messages: list[dict]):
+    """Call the LLM with exponential backoff on rate limit errors."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+        except RateLimitError:
+            if attempt >= MAX_RETRIES:
+                raise
+            delay = RETRY_DELAYS[attempt]
+            logger.warning("Rate limited, retrying in %ds (attempt %d/%d)", delay, attempt + 1, MAX_RETRIES)
+            time.sleep(delay)
 
 
 def call_claude_json(

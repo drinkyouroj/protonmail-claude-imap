@@ -63,6 +63,43 @@ def draft(
             typer.echo("Send cancelled.")
 
 
+@app.command("auto-organize")
+def auto_organize_cmd(
+    folder: str = typer.Option("INBOX", help="IMAP folder to scan."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show recommendations without executing."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Bulk-confirm non-destructive actions."),
+    skip_actions: str = typer.Option("", help="Comma-separated actions to suppress (e.g. 'trash,flag')."),
+    output: Optional[str] = typer.Option(None, help="Write recommendations as JSON to this path."),
+    max_emails: int = typer.Option(50, help="Max unread emails to process."),
+    batch_size: int = typer.Option(20, help="Emails per LLM call."),
+    metadata_only: bool = typer.Option(False, "--metadata-only", help="Classify on sender/subject/date only, skip body."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print token usage per batch."),
+) -> None:
+    """Fetch unread emails and recommend actions using the LLM."""
+    from protonmail_claude.auto_organizer import auto_organize
+    from protonmail_claude.imap_client import ProtonIMAPClient
+
+    skip_set = {s.strip() for s in skip_actions.split(",") if s.strip()}
+
+    with ProtonIMAPClient() as client:
+        result = auto_organize(
+            imap_client=client,
+            folder=folder,
+            max_emails=max_emails,
+            batch_size=batch_size,
+            dry_run=dry_run,
+            auto_confirm=yes,
+            skip_actions=skip_set,
+            metadata_only=metadata_only,
+            verbose=verbose,
+        )
+
+    if output:
+        with open(output, "w") as f:
+            f.write(result.to_json())
+        typer.echo(f"Recommendations written to {output}")
+
+
 @labels_app.command("list")
 def labels_list(
 ) -> None:
