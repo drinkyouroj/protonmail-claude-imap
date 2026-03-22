@@ -139,11 +139,31 @@ def collect_folder_inventory(imap_client: ProtonIMAPClient) -> list[FolderInfo]:
     )
 
     inventory: list[FolderInfo] = []
+    connection_dead = False
     for flags, name in folders_with_flags:
+        if connection_dead:
+            # Connection died from a previous timeout — add folder with zero counts
+            inventory.append(FolderInfo(
+                name=name, flags=flags, message_count=0,
+                unseen_count=0, recent_count=0,
+                is_system=_is_system_folder(name, flags),
+            ))
+            continue
+
         try:
             status = imap_client.folder_status(name)
-        except Exception:
-            logger.warning("Could not get STATUS for folder %r — skipping", name)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "timed out" in err_msg or "eof" in err_msg or "cannot read" in err_msg:
+                logger.warning("Connection lost during STATUS for %r — skipping remaining STATUS calls", name)
+                connection_dead = True
+            else:
+                logger.warning("Could not get STATUS for folder %r — skipping", name)
+            inventory.append(FolderInfo(
+                name=name, flags=flags, message_count=0,
+                unseen_count=0, recent_count=0,
+                is_system=_is_system_folder(name, flags),
+            ))
             continue
 
         # folder_status may return byte keys (from IMAPClient) or string keys
@@ -766,7 +786,18 @@ def recommend(
     if verbose:
         typer.echo("[1/3] Collecting folder inventory...")
 
-    profile = build_profile(imap_client, folder, sample_size, min_count, all_folders)
+    # Reconnect before build_profile — the inventory phase may kill the
+    # connection via STATUS timeouts on Bridge with large mailboxes.
+    try:
+        profile = build_profile(imap_client, folder, sample_size, min_count, all_folders)
+    except Exception as e:
+        if verbose:
+            typer.echo(f"  Build profile failed ({e}), reconnecting...")
+        imap_client.disconnect()
+        import time
+        time.sleep(2)
+        imap_client.connect()
+        profile = build_profile(imap_client, folder, sample_size, min_count, all_folders)
 
     if verbose:
         typer.echo(f"[2/3] Sampled {profile.sample_size} messages from {profile.total_in_scope} total...")
