@@ -138,17 +138,32 @@ class ProtonIMAPClient:
         self._client: IMAPClient | None = None
         self._uidvalidity: dict[str, int] = {}  # folder -> UIDVALIDITY
 
-    def connect(self) -> None:
-        """Connect and authenticate to Proton Bridge."""
-        import ssl
+    def connect(self, _retries: int = 3) -> None:
+        """Connect and authenticate to Proton Bridge.
 
-        self._client = IMAPClient(self.host, port=self.port, ssl=False, timeout=120)
-        # Proton Bridge uses a self-signed certificate
+        Retries up to `_retries` times with a 3-second delay to handle
+        transient Bridge hiccups (STARTTLS EOF, connection refused, etc.).
+        """
+        import ssl
+        import time
+
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
-        self._client.starttls(ssl_context=ssl_context)
-        self._client.login(self.email_address, self.password)
+
+        for attempt in range(1, _retries + 1):
+            try:
+                self._client = IMAPClient(self.host, port=self.port, ssl=False, timeout=120)
+                self._client.starttls(ssl_context=ssl_context)
+                self._client.login(self.email_address, self.password)
+                return
+            except Exception as e:
+                if attempt < _retries:
+                    logger.warning("Connect attempt %d/%d failed (%s), retrying in 3s...", attempt, _retries, e)
+                    time.sleep(3)
+                    self._client = None
+                else:
+                    raise
 
     def disconnect(self) -> None:
         """Logout and close the connection."""
