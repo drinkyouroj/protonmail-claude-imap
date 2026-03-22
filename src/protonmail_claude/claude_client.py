@@ -54,7 +54,7 @@ def call_claude(
     client = _get_client()
     response = _call_with_retry(client, model or MODEL, max_tokens, messages)
 
-    text = response.choices[0].message.content
+    text = response.choices[0].message.content or ""
 
     usage = response.usage
     if usage:

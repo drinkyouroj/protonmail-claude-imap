@@ -653,11 +653,12 @@ def get_recommendations(
         return []
 
     profile_json = json.dumps(profile, indent=2, default=str)
+    logger.debug("Folder recommend profile payload: %d chars (~%d tokens)", len(profile_json), len(profile_json) // 4)
     try:
         raw_recs = call_claude_json(
             user_content=profile_json,
             system_prompt_name="folder_recommend_system",
-            max_tokens=2048,
+            max_tokens=4096,
             model=model,
         )
     except Exception as e:
@@ -774,6 +775,10 @@ def recommend(
     profile_dict = json.loads(profile_json)
 
     if verbose:
+        typer.echo(f"  Profile payload: {len(profile_json):,} chars (~{len(profile_json) // 4:,} tokens)")
+        typer.echo(f"  Sender clusters: {len(profile.sender_clusters)}")
+        typer.echo(f"  Subject patterns: {len(profile.subject_patterns)}")
+        typer.echo(f"  Overlap pairs: {len(profile.overlap_pairs)}")
         typer.echo("[3/3] Analyzing with LLM...")
 
     recs = get_recommendations(profile_dict, model=model)
